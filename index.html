@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="az">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpath d='M50 0 L61 39 L100 50 L61 61 L50 100 L39 61 L0 50 L39 39 Z' fill='%2358A6FF'/%3E%3C/svg%3E" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NovEra - Yeni dövr başlayır</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+            },
+            colors: {
+              'bg-jet': 'var(--color-bg-jet)',
+              'bg-slate': 'var(--color-bg-slate)',
+              'bg-onyx': 'var(--color-bg-onyx)',
+              'text-main': 'var(--color-text)',
+              'text-sub': 'var(--color-subtext)',
+              'accent': 'var(--color-accent)',
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      /* --- THEMES --- */
+      :root, .theme-novera, .theme-terra, .theme-nebula {
+        --color-bg-jet: #0d0f19;
+        --color-bg-slate: #1b2026;
+        --color-bg-onyx: #232931;
+        --color-text: #eeeeee;
+        --color-subtext: #a8b2c1;
+      }
+      .theme-novera {
+        --color-accent: #58A6FF;
+      }
+      .theme-terra { /* Nature theme */
+        --color-accent: #6ee7b7;
+      }
+      .theme-nebula { /* Universe/Nebula theme */
+        --color-accent: #c084fc;
+      }
+      body {
+        /* Set on body for theme consistency, but main app uses transparent bg */
+        background-color: var(--color-bg-jet);
+        color: var(--color-text-main);
+      }
+      
+      #theme-animation-canvas {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        z-index: -1;
+      }
+
+      /* --- LOADING SCREEN --- */
+      #loading-screen {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background-color: #0d0f19;
+        transition: opacity 0.5s ease-out;
+      }
+      #loading-screen.hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+      
+      /* --- ANIMATIONS --- */
+      @keyframes pulse-orb {
+        0% {
+          transform: scale(0.95);
+          box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.7);
+        }
+        70% {
+          transform: scale(1);
+          box-shadow: 0 0 0 20px rgba(88, 166, 255, 0), 0 0 30px rgba(88, 166, 255, 0.5);
+        }
+        100% {
+          transform: scale(0.95);
+          box-shadow: 0 0 0 0 rgba(88, 166, 255, 0);
+        }
+      }
+      .orb-animation {
+        animation: pulse-orb 4s infinite ease-in-out;
+      }
+      .recording-pulse {
+        animation: pulse-rec 1.5s infinite ease-in-out;
+      }
+      @keyframes pulse-rec {
+        0% { box-shadow: 0 0 0 0 rgba(255, 82, 82, 0.7); }
+        70% { box-shadow: 0 0 0 10px rgba(255, 82, 82, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(255, 82, 82, 0); }
+      }
+    </style>
+    <link rel="preconnect" href="https://rsms.me/">
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css">
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.1.1/",
+    "react": "https://aistudiocdn.com/react@^19.1.1",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.16.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.1.1/",
+    "@tanstack/react-query": "https://aistudiocdn.com/@tanstack/react-query@^5.51.1",
+    "@tanstack/react-query/": "https://aistudiocdn.com/@tanstack/react-query@^5.51.1/"
+  }
+}
+</script>
+</head>
+  <body class="font-sans">
+    <div id="loading-screen"></div>
+    <div id="root" class="bg-transparent"></div>
+    <canvas id="theme-animation-canvas"></canvas>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>

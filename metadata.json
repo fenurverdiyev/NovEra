@@ -1,0 +1,8 @@
+{
+  "name": "NovEra",
+  "description": "Süni intellektlə gücləndirilmiş, suallarınıza birbaşa, mənbəli cavablar verən axtarış və kəşfiyyat vasitəsi.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
