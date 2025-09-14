@@ -66,6 +66,7 @@ const App: React.FC = () => {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null); // For image uploads
   const sentenceQueueRef = useRef<string[]>([]);
   const isProcessingSentencesRef = useRef(false);
   const currentPlayingMessageIdRef = useRef<string | null>(null);
@@ -359,6 +360,21 @@ const App: React.FC = () => {
     }
   };
   
+  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const base64Image = e.target?.result as string;
+        // You can now send this image with a message
+        // For now, let's just add it to a new message
+        const query = "Bu şəkli analiz et.";
+        handleSend(query, [base64Image]);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   const handleCloseVoiceOverlay = () => {
     setIsVoiceOverlayOpen(false);
     setLiveVocalResponse(null);
@@ -395,7 +411,11 @@ const App: React.FC = () => {
                         )}
                     </main>
                     <footer className="bg-transparent pt-2">
-                        <SearchBar onSend={(q) => handleSend(q)} isLoading={isLoading} onVoiceClick={() => setIsVoiceOverlayOpen(true)} />
+                        <SearchBar 
+                            onSend={(q) => handleSend(q)} 
+                            isLoading={isLoading} 
+                            onVoiceClick={() => setIsVoiceOverlayOpen(true)} 
+                        />
                         <p className="text-center text-xs text-text-sub pb-3">
                         NovEra səhv edə bilər. Vacib məlumatları yoxlamağınız tövsiyə olunur.
                         </p>
@@ -415,6 +435,13 @@ const App: React.FC = () => {
       <div className="flex-1 flex flex-col overflow-y-hidden">
         {renderView()}
       </div>
+      <input 
+        type="file" 
+        ref={fileInputRef} 
+        onChange={handleImageUpload}
+        className="hidden" 
+        accept="image/*"
+      />
       <audio ref={audioRef} crossOrigin="anonymous" />
       <VoiceOverlay 
         isOpen={isVoiceOverlayOpen} 
