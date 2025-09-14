@@ -1,131 +1,119 @@
-import React, { useEffect } from 'react';
-import { ThemeAnimationProps } from './themes';
+import React from 'react';
+import type { ThemeAnimationProps } from './themes';
 
-export const NatureAnimation: React.FC<ThemeAnimationProps> = () => {
+interface VineNode {
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    life: number;
+    angle: number;
+    speed: number;
+    branch: VineNode[];
+}
 
-    useEffect(() => {
-        const canvas = document.getElementById('theme-animation-canvas') as HTMLCanvasElement;
+export const NatureAnimation: React.FC<ThemeAnimationProps> = ({ analyserNode }) => {
+    const canvasRef = React.useRef<HTMLCanvasElement>(null);
+    const vines = React.useRef<VineNode[]>([]).current;
+    const mousePos = React.useRef({ x: -999, y: -999 }).current;
+
+    React.useEffect(() => {
+        const canvas = canvasRef.current;
         if (!canvas) return;
-
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
-        let animationFrameId: number;
-        let mouse = { x: -999, y: -999, radius: 80 };
-        const vines: any[] = [];
-
-        class Vine {
-            points: { x: number; y: number; vx: number; vy: number; origX: number; origY: number; }[];
-            isGrowing: boolean;
-            growthSpeed: number;
-            maxPoints: number;
-            startX: number;
-            side: 'left' | 'right';
-            color: string;
-            
-            constructor(side: 'left' | 'right') {
-                this.side = side;
-                this.startX = this.side === 'left' ? 20 : canvas.width - 20;
-                this.points = [{ x: this.startX, y: 0, vx: 0, vy: 0, origX: this.startX, origY: 0 }];
-                this.isGrowing = true;
-                this.growthSpeed = Math.random() * 0.5 + 0.3;
-                this.maxPoints = 150;
-                this.color = `rgba(110, 231, 183, ${Math.random() * 0.3 + 0.4})`;
-            }
-
-            update() {
-                // Grow
-                if (this.isGrowing && this.points.length < this.maxPoints) {
-                    const lastPoint = this.points[this.points.length - 1];
-                    if (lastPoint.y > canvas.height + 20) {
-                        this.isGrowing = false;
-                    } else {
-                        const newY = lastPoint.y + this.growthSpeed * 5;
-                        const newX = this.startX + Math.sin(newY * 0.02) * 20 * (Math.sin(newY * 0.005) + 0.5);
-                        this.points.push({ x: newX, y: newY, vx: 0, vy: 0, origX: newX, origY: newY });
-                    }
-                }
-
-                // Update points based on mouse and physics
-                this.points.forEach(p => {
-                    const dx = p.x - mouse.x;
-                    const dy = p.y - mouse.y;
-                    const dist = Math.sqrt(dx * dx + dy * dy);
-
-                    // Mouse repulsion
-                    if (dist < mouse.radius) {
-                        const force = (mouse.radius - dist) / mouse.radius;
-                        p.vx += (dx / dist) * force * 0.5;
-                        p.vy += (dy / dist) * force * 0.5;
-                    }
-
-                    // Spring back to original position
-                    p.vx += (p.origX - p.x) * 0.01;
-                    p.vy += (p.origY - p.y) * 0.01;
-
-                    // Apply velocity and damping
-                    p.vx *= 0.95;
-                    p.vy *= 0.95;
-                    p.x += p.vx;
-                    p.y += p.vy;
-                });
-            }
-
-            draw() {
-                if (this.points.length < 2) return;
-                ctx.strokeStyle = this.color;
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.moveTo(this.points[0].x, this.points[0].y);
-                for (let i = 1; i < this.points.length - 1; i++) {
-                    const xc = (this.points[i].x + this.points[i + 1].x) / 2;
-                    const yc = (this.points[i].y + this.points[i + 1].y) / 2;
-                    ctx.quadraticCurveTo(this.points[i].x, this.points[i].y, xc, yc);
-                }
-                ctx.stroke();
-            }
-        }
-
-        const setup = () => {
+        const resizeCanvas = () => {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
-            vines.length = 0;
-            vines.push(new Vine('left'));
-            vines.push(new Vine('right'));
-             if (canvas.width > 800) {
-                vines.push(new Vine('left'));
-                vines.push(new Vine('right'));
+            if (vines.length === 0) {
+                // Start vines from corners
+                vines.push(createVine(0, 0, Math.PI / 4));
+                vines.push(createVine(canvas.width, 0, (3 * Math.PI) / 4));
+                vines.push(createVine(0, canvas.height, -Math.PI / 4));
+                vines.push(createVine(canvas.width, canvas.height, (-3 * Math.PI) / 4));
+            }
+        };
+
+        const createVine = (x: number, y: number, angle: number): VineNode => ({
+            x, y, vx: 0, vy: 0, life: 100, angle, speed: Math.random() * 0.5 + 0.2, branch: []
+        });
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        const handleMouseMove = (e: MouseEvent) => {
+            mousePos.x = e.clientX;
+            mousePos.y = e.clientY;
+        };
+        window.addEventListener('mousemove', handleMouseMove);
+
+        let animationFrameId: number;
+
+        const drawVine = (node: VineNode, audioLevel: number, depth = 0) => {
+            const dx = mousePos.x - node.x;
+            const dy = mousePos.y - node.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            // Grow towards mouse
+            const targetAngle = Math.atan2(dy, dx);
+            node.angle += (targetAngle - node.angle) * 0.02;
+
+            node.vx = Math.cos(node.angle) * node.speed * (1 + audioLevel * 2);
+            node.vy = Math.sin(node.angle) * node.speed * (1 + audioLevel * 2);
+
+            const nextX = node.x + node.vx;
+            const nextY = node.y + node.vy;
+
+            ctx.beginPath();
+            ctx.moveTo(node.x, node.y);
+            ctx.lineTo(nextX, nextY);
+            ctx.strokeStyle = `hsl(145, 63%, ${40 + audioLevel * 20}%)`;
+            ctx.lineWidth = Math.max(1, 5 - depth * 0.5);
+            ctx.stroke();
+
+            node.x = nextX;
+            node.y = nextY;
+
+            // Branching logic
+            if (node.branch.length < 5 && Math.random() < 0.01) {
+                node.branch.push(createVine(node.x, node.y, node.angle + (Math.random() - 0.5) * Math.PI / 2));
+            }
+
+            // Draw branches
+            node.branch.forEach(branch => drawVine(branch, audioLevel, depth + 1));
+
+            // Reset if out of bounds
+            if (node.x < -50 || node.x > canvas.width + 50 || node.y < -50 || node.y > canvas.height + 50) {
+                Object.assign(node, createVine(canvas.width / 2, canvas.height / 2, Math.random() * Math.PI * 2));
             }
         };
 
         const animate = () => {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            vines.forEach(vine => {
-                vine.update();
-                vine.draw();
-            });
+            let audioLevel = 0;
+            if (analyserNode) {
+                const dataArray = new Uint8Array(analyserNode.frequencyBinCount);
+                analyserNode.getByteFrequencyData(dataArray);
+                const sum = dataArray.reduce((a, b) => a + b, 0);
+                audioLevel = sum / (dataArray.length * 255);
+            }
+
+            ctx.fillStyle = 'rgba(13, 15, 25, 0.1)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.lineCap = 'round';
+
+            vines.forEach(vine => drawVine(vine, audioLevel));
+
             animationFrameId = requestAnimationFrame(animate);
         };
-        
-        const handleMouseMove = (e: MouseEvent) => {
-            mouse.x = e.clientX;
-            mouse.y = e.clientY;
-        };
-
-        const handleResize = () => setup();
-
-        setup();
         animate();
-        window.addEventListener('resize', handleResize);
-        window.addEventListener('mousemove', handleMouseMove);
 
         return () => {
-            cancelAnimationFrame(animationFrameId);
-            window.removeEventListener('resize', handleResize);
+            window.removeEventListener('resize', resizeCanvas);
             window.removeEventListener('mousemove', handleMouseMove);
-            if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+            cancelAnimationFrame(animationFrameId);
         };
-    }, []);
+    }, [analyserNode, vines, mousePos]);
 
-    return null;
+    return <canvas ref={canvasRef} className="fixed top-0 left-0 w-full h-full -z-10 bg-gradient-to-b from-[#0d0f19] to-[#1a3a1a]" />;
 };

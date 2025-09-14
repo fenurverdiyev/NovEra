@@ -2,12 +2,14 @@
 import { GoogleGenAI, Type, Content, Tool } from "@google/genai";
 import type { Source, NewsArticle, WeatherData, Message } from '../types';
 
-if (!process.env.API_KEY) {
-    throw new Error("API_KEY environment variable not set");
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+
+if (!GEMINI_API_KEY) {
+    throw new Error("VITE_GEMINI_API_KEY environment variable not set");
 }
   
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-const model = 'gemini-2.5-flash';
+const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+const model = 'gemini-1.5-flash-latest';
 
 // Add new device assistant functions
 // Fix: The type `FunctionDeclarationTool[]` is incorrect and has been replaced with `Tool[]`.
@@ -114,10 +116,22 @@ const assistantTools: Tool[] = [
             required: ['device', 'state'],
           },
         },
+        {
+          name: 'webSearch',
+          description: 'Vebdə şəkil və videoları tapmaq üçün axtarış aparır. Tapılan URL-lər tətbiqdə istifadəçiyə göstərilir.',
+          parameters: {
+            type: Type.OBJECT,
+            properties: {
+              query: { type: Type.STRING, description: 'Şəkil/video üçün axtarış mətni.' },
+              maxImages: { type: Type.NUMBER, description: 'Maksimum şəkil sayı (default 6).' },
+              maxVideos: { type: Type.NUMBER, description: 'Maksimum video sayı (default 3).' },
+            },
+            required: ['query'],
+          },
+        },
       ],
     },
 ];
-
 
 /**
  * Maps the application's Message array to the Gemini API's Content array format.
@@ -136,7 +150,7 @@ export async function* streamChatQuery(
     history: Message[],
     images: string[] = []
 ): AsyncGenerator<{ text?: string; sources?: Source[], images?: string[], videos?: string[], toolCalls?: any[] }> {
-    const systemInstruction = "Sən köməkçi assistantsan və mütləq Azərbaycan dilində cavab verməlisən. Sənə cihazla bağlı bəzi funksiyaları yerinə yetirmək üçün alətlər verilib: zəng etmək, mesaj göndərmək, siqnal qurmaq, təqvimə tədbir əlavə etmək, qeyd yazmaq və cihaz funksiyalarını (wifi, bluetooth, fənər) idarə etmək. İstifadəçi bu funksiyalardan birini istədikdə, lazımi məlumatları (məsələn, kimə zəng ediləcəyi, mesajın mətni, siqnalın vaxtı) topla. Əgər hər hansı məlumat əskikdirsə, aləti çağırmazdan əvvəl aydınlaşdırıcı sual ver. Bütün məlumatlar toplandıqdan sonra müvafiq aləti çağır. Ekranı oxumaq, bildirişləri yoxlamaq kimi dəstəklənməyən sorğular üçün, bu funksiyanı birbaşa brauzerdən edə bilmədiyini nəzakətlə bildir. Həmçinin, istifadəçi sorğularını vizual olaraq zənginləşdirmək üçün şəkil və video tapmaq məqsədilə Google Axtarışından istifadə et. Şəkil/video URL-lərini cavabına bu formatda daxil et: [image: URL] [video: URL].";
+    const systemInstruction = "Sən NovEra adlı bir köməkçi assistantsan və bütün cavablarını Azərbaycan dilində verməlisən. İstifadəçinin sorğusu şəkil, video və ya hər hansı bir vizual məlumat axtarışını nəzərdə tutursa, `webSearch` alətini çağırmaq MƏCBURİDİR. Məsələn, 'pişik şəkilləri' sorğusu üçün `webSearch({query: 'pişiklər'})` çağırmalısan. Alətdən istifadə etmədən vizual məzmun haqqında cavab vermə. Alətdən gələn nəticələri təsvir edərkən detallı ol.";
     
     const historicContent = mapMessagesToContent(history);
     
@@ -205,21 +219,26 @@ export async function* streamChatQuery(
             }
         }
         
-        const toolCalls = chunk.candidates?.[0]?.content?.parts
-            ?.filter(part => !!part.functionCall)
-            .map(part => part.functionCall);
+        // Return tool calls in the wrapper shape expected by App.tsx: { functionCall: { name, args } }
+        const toolCallParts = chunk.candidates?.[0]?.content?.parts
+            ?.filter(part => !!(part as any).functionCall) as any[] | undefined;
 
         yield { 
             text, 
             sources: newSources.length > 0 ? newSources : undefined,
             images: newImages.length > 0 ? newImages : undefined,
             videos: newVideos.length > 0 ? newVideos : undefined,
-            toolCalls: toolCalls?.length ? toolCalls : undefined,
+            toolCalls: toolCallParts && toolCallParts.length ? toolCallParts : undefined,
         };
     }
 }
 
-
+/**
+ * Generates related questions based on the given prompt and answer.
+ * @param prompt The original prompt.
+ * @param answer The answer to the prompt.
+ * @returns An array of related questions.
+ */
 export async function generateRelatedQuestions(prompt: string, answer: string): Promise<string[]> {
     try {
         const fullPrompt = `Based on the following question and its answer, generate 3 concise and relevant follow-up questions that a curious user might ask next.
@@ -260,6 +279,11 @@ Return the questions as a JSON array of strings.`;
     }
 }
 
+/**
+ * Analyzes a news article and provides a summary, potential biases, and wider implications.
+ * @param article The news article to analyze.
+ * @returns A summary of the article.
+ */
 export async function analyzeNewsArticle(article: NewsArticle): Promise<string> {
     try {
         const prompt = `Please analyze the following news article. Provide a concise, neutral summary covering the key points, any potential biases detected, and the wider implications of the story.
@@ -282,7 +306,11 @@ export async function analyzeNewsArticle(article: NewsArticle): Promise<string> 
     }
 }
 
-
+/**
+ * Retrieves the current weather and a 5-day forecast for a given location.
+ * @param location The location to retrieve the weather for.
+ * @returns The weather data.
+ */
 export async function getWeather(location: string): Promise<WeatherData> {
     try {
         const response = await ai.models.generateContent({
@@ -357,6 +385,12 @@ export async function getWeather(location: string): Promise<WeatherData> {
     }
 }
 
+/**
+ * Translates the given text to the target language.
+ * @param text The text to translate.
+ * @param targetLang The target language.
+ * @returns The translated text.
+ */
 export async function translateText(text: string, targetLang: string): Promise<string> {
     if (!text || !text.trim()) {
         return "";

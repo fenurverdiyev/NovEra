@@ -5,34 +5,53 @@ import type { VoiceOption } from '../types';
 
 // IMPORTANT: Do not hardcode API keys in the source code.
 // This key should be loaded from an environment variable, e.g., process.env.ELEVENLABS_API_KEY
-const ELEVENLABS_API_KEY = ''; // REMOVED HARDCODED KEY
+const ELEVENLABS_API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY;
+const ELEVENLABS_BASE_URL = 'https://api.elevenlabs.io/v1';
 
-// Voice IDs from user request:
-// Betül Voice id: 6GYyziau4Hk8qdg7od5c
-// Cansu Voice id: SMRHdMmNcA5RcHlk7xCP
-// Will Voice id: kIfcKu9kr8RZrbz7H3ox
-// Liam Voice id: TX3LPaxmHKxFdv7VOQHJ
-export const AVAILABLE_VOICES: VoiceOption[] = [
-    { id: 'TX3LPaxmHKxFdv7VOQHJ', name: 'Liam' },
-    { id: '6GYyziau4Hk8qdg7od5c', name: 'Betül' },
-    { id: 'SMRHdMmNcA5RcHlk7xCP', name: 'Cansu' },
-    { id: 'kIfcKu9kr8RZrbz7H3ox', name: 'Will' },
+if (!ELEVENLABS_API_KEY) {
+    console.warn('VITE_ELEVENLABS_API_KEY not found. Voice features will be disabled.');
+}
+
+export interface Voice {
+    id: string;
+    name: string;
+    category: string;
+}
+
+export const AVAILABLE_VOICES: Voice[] = [
+    { id: 'TX3LPaxmHKxFdv7VOQHJ', name: 'Bella', category: 'premade' },
+    { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Bella', category: 'premade' },
+    { id: 'ErXwobaYiN019PkySvjV', name: 'Antoni', category: 'premade' },
+    { id: 'VR6AewLTigWG4xSOukaG', name: 'Arnold', category: 'premade' },
+    { id: 'pNInz6obpgDQGcFmaJgB', name: 'Adam', category: 'premade' },
+    { id: 'yoZ06aMxZJJ28mfd3POQ', name: 'Sam', category: 'premade' },
 ];
 
-export const textToSpeech = async (text: string, voiceId: string = 'TX3LPaxmHKxFdv7VOQHJ'): Promise<string | null> => {
+/**
+ * Converts text to speech using ElevenLabs API
+ * @param text The text to convert to speech
+ * @param voiceId The voice ID to use (default: first available voice)
+ * @param stability Voice stability (0.0 to 1.0, default: 0.5)
+ * @param similarityBoost Voice similarity boost (0.0 to 1.0, default: 0.75)
+ * @returns Promise<string | null> - Returns audio URL or null if failed
+ */
+export async function textToSpeech(
+    text: string,
+    voiceId: string = AVAILABLE_VOICES[0]?.id || 'TX3LPaxmHKxFdv7VOQHJ',
+    stability: number = 0.5,
+    similarityBoost: number = 0.75
+): Promise<string | null> {
     if (!ELEVENLABS_API_KEY) {
-        console.warn("ElevenLabs API key not found. Make sure ELEVENLABS_API_KEY environment variable is set. Skipping text-to-speech.");
+        console.warn('ElevenLabs API key not available');
         return null;
     }
 
-    if (!text || text.trim().length < 5) {
+    if (!text || text.trim().length === 0) {
         return null;
     }
-
-    const API_URL = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
 
     try {
-        const response = await fetch(API_URL, {
+        const response = await fetch(`${ELEVENLABS_BASE_URL}/text-to-speech/${voiceId}`, {
             method: 'POST',
             headers: {
                 'Accept': 'audio/mpeg',
@@ -40,32 +59,209 @@ export const textToSpeech = async (text: string, voiceId: string = 'TX3LPaxmHKxF
                 'xi-api-key': ELEVENLABS_API_KEY,
             },
             body: JSON.stringify({
-                text: text,
-                model_id: 'eleven_v3',
+                text: text.trim(),
+                model_id: 'eleven_multilingual_v2',
                 voice_settings: {
-                    stability: 0.5,
-                    similarity_boost: 0.75,
-                },
+                    stability,
+                    similarity_boost: similarityBoost,
+                    style: 0.0,
+                    use_speaker_boost: true
+                }
             }),
         });
 
         if (!response.ok) {
-            let errorBody;
+            const errorText = await response.text();
+            console.error('ElevenLabs API error:', response.status, errorText);
+            // Fallback: try the streaming endpoint which sometimes succeeds where the standard one fails
             try {
-                 errorBody = await response.json();
-                 console.error("ElevenLabs API Error:", JSON.stringify(errorBody, null, 2));
-            } catch(e) {
-                 errorBody = await response.text();
-                 console.error("ElevenLabs API Error (non-JSON):", errorBody);
+                const streamResp = await fetch(`${ELEVENLABS_BASE_URL}/text-to-speech/${voiceId}/stream`, {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'audio/mpeg',
+                        'Content-Type': 'application/json',
+                        'xi-api-key': ELEVENLABS_API_KEY,
+                    },
+                    body: JSON.stringify({
+                        text: text.trim(),
+                        model_id: 'eleven_multilingual_v2',
+                        voice_settings: {
+                            stability,
+                            similarity_boost: similarityBoost,
+                            style: 0.0,
+                            use_speaker_boost: true
+                        }
+                    }),
+                });
+                if (!streamResp.ok) {
+                    const streamErr = await streamResp.text();
+                    console.error('ElevenLabs STREAM API error:', streamResp.status, streamErr);
+                    return null;
+                }
+                const streamBlob = await streamResp.blob();
+                return URL.createObjectURL(streamBlob);
+            } catch (fallbackError) {
+                console.error('Fallback to streaming endpoint failed:', fallbackError);
+                return null;
             }
-            throw new Error(`ElevenLabs API request failed with status ${response.status}`);
         }
 
         const audioBlob = await response.blob();
-        return URL.createObjectURL(audioBlob);
-
+        const audioUrl = URL.createObjectURL(audioBlob);
+        
+        return audioUrl;
     } catch (error) {
-        console.error("Error with ElevenLabs text-to-speech:", error);
+        console.error('Error in textToSpeech:', error);
         return null;
     }
-};
+}
+
+/**
+ * Converts text to speech with streaming support for real-time playback
+ * @param text The text to convert to speech
+ * @param voiceId The voice ID to use
+ * @returns Promise<string | null> - Returns audio URL or null if failed
+ */
+export async function textToSpeechStream(
+    text: string,
+    voiceId: string = AVAILABLE_VOICES[0]?.id || 'TX3LPaxmHKxFdv7VOQHJ'
+): Promise<string | null> {
+    if (!ELEVENLABS_API_KEY) {
+        console.warn('ElevenLabs API key not available');
+        return null;
+    }
+
+    if (!text || text.trim().length === 0) {
+        return null;
+    }
+
+    try {
+        const response = await fetch(`${ELEVENLABS_BASE_URL}/text-to-speech/${voiceId}/stream`, {
+            method: 'POST',
+            headers: {
+                'Accept': 'audio/mpeg',
+                'Content-Type': 'application/json',
+                'xi-api-key': ELEVENLABS_API_KEY,
+            },
+            body: JSON.stringify({
+                text: text.trim(),
+                model_id: 'eleven_multilingual_v2',
+                voice_settings: {
+                    stability: 0.5,
+                    similarity_boost: 0.75,
+                    style: 0.0,
+                    use_speaker_boost: true
+                }
+            }),
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('ElevenLabs streaming API error:', response.status, errorText);
+            return null;
+        }
+
+        const audioBlob = await response.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+        
+        return audioUrl;
+    } catch (error) {
+        console.error('Error in textToSpeechStream:', error);
+        return null;
+    }
+}
+
+/**
+ * Batch convert multiple text chunks to speech for optimized playback
+ * @param textChunks Array of text chunks to convert
+ * @param voiceId The voice ID to use
+ * @returns Promise<(string | null)[]> - Returns array of audio URLs
+ */
+export async function batchTextToSpeech(
+    textChunks: string[],
+    voiceId: string = AVAILABLE_VOICES[0]?.id || 'TX3LPaxmHKxFdv7VOQHJ'
+): Promise<(string | null)[]> {
+    const promises = textChunks.map(chunk => textToSpeech(chunk, voiceId));
+    return Promise.all(promises);
+}
+
+/**
+ * Preload audio for faster playback
+ * @param audioUrl The audio URL to preload
+ * @returns Promise<HTMLAudioElement | null>
+ */
+export async function preloadAudio(audioUrl: string): Promise<HTMLAudioElement | null> {
+    return new Promise((resolve) => {
+        const audio = new Audio(audioUrl);
+        audio.preload = 'auto';
+        
+        const handleCanPlay = () => {
+            audio.removeEventListener('canplaythrough', handleCanPlay);
+            audio.removeEventListener('error', handleError);
+            resolve(audio);
+        };
+        
+        const handleError = () => {
+            audio.removeEventListener('canplaythrough', handleCanPlay);
+            audio.removeEventListener('error', handleError);
+            resolve(null);
+        };
+        
+        audio.addEventListener('canplaythrough', handleCanPlay);
+        audio.addEventListener('error', handleError);
+        
+        // Timeout after 5 seconds
+        setTimeout(() => {
+            audio.removeEventListener('canplaythrough', handleCanPlay);
+            audio.removeEventListener('error', handleError);
+            resolve(null);
+        }, 5000);
+    });
+}
+
+/**
+ * Get available voices from ElevenLabs API
+ * @returns Promise<Voice[]> - Returns array of available voices
+ */
+export async function getAvailableVoices(): Promise<Voice[]> {
+    if (!ELEVENLABS_API_KEY) {
+        return AVAILABLE_VOICES;
+    }
+
+    try {
+        const response = await fetch(`${ELEVENLABS_BASE_URL}/voices`, {
+            headers: {
+                'xi-api-key': ELEVENLABS_API_KEY,
+            },
+        });
+
+        if (!response.ok) {
+            console.error('Failed to fetch voices:', response.status);
+            return AVAILABLE_VOICES;
+        }
+
+        const data = await response.json();
+        const voices: Voice[] = data.voices.map((voice: any) => ({
+            id: voice.voice_id,
+            name: voice.name,
+            category: voice.category || 'custom'
+        }));
+
+        return voices.length > 0 ? voices : AVAILABLE_VOICES;
+    } catch (error) {
+        console.error('Error fetching voices:', error);
+        return AVAILABLE_VOICES;
+    }
+}
+
+/**
+ * Clean up audio URLs to prevent memory leaks
+ * @param audioUrls Array of audio URLs to clean up
+ */
+export function cleanupAudioUrls(audioUrls: string[]): void {
+    audioUrls.forEach(url => {
+        if (url && url.startsWith('blob:')) {
+            URL.revokeObjectURL(url);
+        }
+    });
+}

@@ -1,4 +1,5 @@
 import type { Message, ToolCall } from '../types';
+import { searchImagesAndVideos } from '../services/searchService';
 
 type AddMessageFunc = (message: Omit<Message, 'id'>) => void;
 
@@ -31,6 +32,9 @@ export const useDeviceTools = (addMessage: AddMessageFunc) => {
                         break;
                     case 'toggleDevice':
                         await executeToggleDevice(call.args);
+                        break;
+                    case 'webSearch':
+                        await executeWebSearch(call.args);
                         break;
                     default:
                         console.warn(`Unknown tool call: ${call.name}`);
@@ -172,6 +176,31 @@ export const useDeviceTools = (addMessage: AddMessageFunc) => {
         });
     };
 
+    const executeWebSearch = async (args: Record<string, any>) => {
+        const { query, maxImages = 6, maxVideos = 3 } = args || {};
+        if (!query || typeof query !== 'string') {
+            addMessage({ role: 'model', text: 'Axtarış üçün sual tapılmadı.' });
+            return;
+        }
+        try {
+            addMessage({ role: 'model', text: `🔎 Axtarıram: "${query}" ...` });
+            const { images, videos } = await searchImagesAndVideos(query, maxImages, maxVideos);
+            if ((images && images.length) || (videos && videos.length)) {
+                addMessage({
+                    role: 'model',
+                    text: 'Tapdığım vizuallar aşağıdadır.',
+                    images,
+                    videos,
+                });
+            } else {
+                addMessage({ role: 'model', text: 'Uyğun vizual tapılmadı.' });
+            }
+        } catch (e) {
+            console.error('webSearch error:', e);
+            addMessage({ role: 'model', text: 'Vizuallar üçün axtarış zamanı xəta baş verdi.' });
+        }
+    };
 
-    return { executeToolCalls };
-};
+     
+     return { executeToolCalls };
+ };

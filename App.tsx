@@ -3,6 +3,7 @@ import { SearchBar } from './components/SearchBar';
 import { MessageDisplay } from './components/MessageDisplay';
 import { streamChatQuery, generateRelatedQuestions } from './services/geminiService';
 import { textToSpeech, AVAILABLE_VOICES } from './services/elevenLabsService';
+import { searchImagesAndVideos } from './services/searchService';
 import type { Message, AppView, AppSettings, ToolCall } from './types';
 import { Sidebar } from './components/Sidebar';
 import { News } from './components/News';
@@ -60,16 +61,18 @@ const App: React.FC = () => {
   const [isVoiceOverlayOpen, setIsVoiceOverlayOpen] = useState(false);
   const [liveVocalResponse, setLiveVocalResponse] = useState<{ id: string; text: string; } | null>(null);
   const [scrollOffset, setScrollOffset] = useState(0);
+  const [vocalAudioQueue, setVocalAudioQueue] = useState<string[]>([]);
+  const [isVocalPlayback, setIsVocalPlayback] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
-  const audioQueueRef = useRef<string[]>([]);
-  const currentAudioIndexRef = useRef(0);
-  const audioCacheRef = useRef<Record<string, Record<number, string | null>>>({});
+  const sentenceQueueRef = useRef<string[]>([]);
+  const isProcessingSentencesRef = useRef(false);
   const currentPlayingMessageIdRef = useRef<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const audioSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const sentenceAudioCacheRef = useRef<Record<string, string | null>>({});
 
   const addMessage = useCallback((message: Omit<Message, 'id'>) => {
     setMessages(prev => [...prev, { ...message, id: Date.now().toString() }]);
@@ -85,7 +88,7 @@ const App: React.FC = () => {
         if (loadingScreen) {
             loadingScreen.classList.add('hidden');
         }
-    }, 2500); // Show loading for 2.5 seconds
+    }, 3000); // Show loading for 3 seconds
     return () => clearTimeout(timer);
   }, []);
   
@@ -132,6 +135,21 @@ const App: React.FC = () => {
     }
   }, [settings]);
 
+  useEffect(() => {
+    const unlockAudio = () => {
+      try {
+        if (audioContextRef.current?.state === 'suspended') {
+          audioContextRef.current.resume();
+        }
+      } catch (e) {
+        console.warn('AudioContext resume failed:', e);
+      }
+      window.removeEventListener('pointerdown', unlockAudio);
+    };
+    window.addEventListener('pointerdown', unlockAudio);
+    return () => window.removeEventListener('pointerdown', unlockAudio);
+  }, []);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -147,84 +165,98 @@ const App: React.FC = () => {
       }
       setPlayingMessageId(null);
       currentPlayingMessageIdRef.current = null;
-      audioQueueRef.current = [];
-      currentAudioIndexRef.current = 0;
+      sentenceQueueRef.current = [];
+      isProcessingSentencesRef.current = false;
+      // Keep sentence audio cache for replay (do not clear here)
   }, []);
 
-  const processAudioQueue = useCallback(async () => {
-    const messageId = currentPlayingMessageIdRef.current;
-    if (!messageId || currentAudioIndexRef.current >= audioQueueRef.current.length) {
-      stopPlayback();
-      return;
+  const processVocalStream = useCallback(async () => {
+    if (isProcessingSentencesRef.current || sentenceQueueRef.current.length === 0 || !currentPlayingMessageIdRef.current) {
+        return;
     }
 
-    const index = currentAudioIndexRef.current;
-    const text = audioQueueRef.current[index];
-    
-    if (!audioCacheRef.current[messageId]) audioCacheRef.current[messageId] = {};
-    const messageCache = audioCacheRef.current[messageId];
+    isProcessingSentencesRef.current = true;
+    const sentence = sentenceQueueRef.current[0]; // Cümləni növbədən silmə
 
-    const nextIndex = index + 1;
-    if (nextIndex < audioQueueRef.current.length && !messageCache[nextIndex]) {
-        textToSpeech(audioQueueRef.current[nextIndex], settings.voiceId).then(url => {
-            if (currentPlayingMessageIdRef.current === messageId) messageCache[nextIndex] = url;
+    if (!sentence || !audioRef.current) {
+        isProcessingSentencesRef.current = false;
+        return;
+    }
+
+    try {
+        // Növbəti cümlələri öncədən yüklə
+        const nextSentences = sentenceQueueRef.current.slice(1, 3);
+        nextSentences.forEach(nextSentence => {
+            if (nextSentence && sentenceAudioCacheRef.current[nextSentence] === undefined) {
+                sentenceAudioCacheRef.current[nextSentence] = null; // Yüklənməyə başladığını işarələ
+                textToSpeech(nextSentence, settings.voiceId).then(url => {
+                    sentenceAudioCacheRef.current[nextSentence] = url;
+                });
+            }
         });
-    }
 
-    let url = messageCache[index];
-    if (url === undefined) {
-      url = await textToSpeech(text, settings.voiceId);
-      messageCache[index] = url;
-    }
+        let url = sentenceAudioCacheRef.current[sentence];
+        if (url === undefined || url === null) { // Əgər cache-də yoxdursa və ya hələ yüklənməyibsə
+            url = await textToSpeech(sentence, settings.voiceId);
+            sentenceAudioCacheRef.current[sentence] = url;
+        }
 
-    if (url && audioRef.current && currentPlayingMessageIdRef.current === messageId) {
-      audioRef.current.src = url;
-      try {
-        await audioRef.current.play();
-      } catch (error) {
-        console.error("Audio play failed:", error);
-        stopPlayback();
-      }
-    } else {
-      currentAudioIndexRef.current++;
-      processAudioQueue();
+        if (url && currentPlayingMessageIdRef.current) {
+            sentenceQueueRef.current.shift(); // Səs uğurla yükləndikdən sonra cümləni növbədən sil
+            audioRef.current.src = url;
+            if (audioContextRef.current?.state === 'suspended') {
+                await audioContextRef.current.resume();
+            }
+            await audioRef.current.play();
+        } else {
+            isProcessingSentencesRef.current = false;
+            setTimeout(processVocalStream, 100); // Uğursuz olarsa, bir az sonra yenidən cəhd et
+        }
+    } catch (error) {
+        console.error("Səs oxunarkən xəta baş verdi:", sentence, error);
+        // Surface error on the current message
+        if (currentPlayingMessageIdRef.current) {
+          setMessages(prev => prev.map(m => m.id === currentPlayingMessageIdRef.current ? { ...m, ttsError: 'Səsləndirmə mümkün olmadı. Zəhmət olmasa yenidən cəhd edin.' } : m));
+        }
+        sentenceQueueRef.current.shift(); // Xətalı cümləni atla
+        isProcessingSentencesRef.current = false;
+        processVocalStream(); // Növbəti cümləyə keç
     }
-  }, [settings.voiceId, stopPlayback]);
-
+}, [settings.voiceId]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
+
     const handleAudioEnd = () => {
-      if (currentPlayingMessageIdRef.current) {
-        currentAudioIndexRef.current++;
-        processAudioQueue();
-      }
+        isProcessingSentencesRef.current = false;
+        processVocalStream(); // Növbəti cümləni oxu
     };
+
     audio.addEventListener('ended', handleAudioEnd);
     return () => audio.removeEventListener('ended', handleAudioEnd);
-  }, [processAudioQueue]);
-
+  }, [processVocalStream]);
 
   const handlePlayAudio = (messageId: string, text: string) => {
-    if (audioContextRef.current?.state === 'suspended') {
-        audioContextRef.current.resume();
-    }
     if (playingMessageId === messageId) {
         stopPlayback();
         return;
     }
     stopPlayback();
-    audioQueueRef.current = chunkText(text);
-    if (audioQueueRef.current.length === 0) return;
-    currentAudioIndexRef.current = 0;
+    // Clear any previous TTS error on this message when retrying
+    setMessages(prev => prev.map(m => m.id === messageId ? { ...m, ttsError: undefined } : m));
+    const chunks = chunkText(text);
+    if (chunks.length === 0) return;
+
+    sentenceQueueRef.current = chunks;
     currentPlayingMessageIdRef.current = messageId;
     setPlayingMessageId(messageId);
-    processAudioQueue();
+    processVocalStream();
   };
 
   const handleSend = async (query: string, images?: string[], isVocalQuery: boolean = false) => {
-    if (!isVocalQuery) setIsVoiceOverlayOpen(false);
+    // Always close overlay; background TTS will continue
+    setIsVoiceOverlayOpen(false);
     stopPlayback();
     setIsLoading(true);
     const userMessage: Message = { id: Date.now().toString(), role: 'user', text: query };
@@ -240,36 +272,85 @@ const App: React.FC = () => {
     try {
       let fullResponseText = '';
       let accumulatedToolCalls: ToolCall[] = [];
+      let sentenceAccumulator = '';
+      const sentenceEndRegex = /[.!?…]/;
+
+      if (isVocalQuery && settings.voiceEnabled) {
+          currentPlayingMessageIdRef.current = modelMessageId;
+          setPlayingMessageId(modelMessageId);
+      }
+
       const stream = streamChatQuery(query, history, images);
 
       for await (const chunk of stream) {
-        if (chunk.text) fullResponseText += chunk.text;
-        
-        if (chunk.toolCalls) {
-            accumulatedToolCalls.push(...chunk.toolCalls);
-        }
+          if (chunk.text) {
+              fullResponseText += chunk.text;
+              sentenceAccumulator += chunk.text;
 
-        setMessages(prev => prev.map(msg => msg.id === modelMessageId ? {
-            ...msg, text: fullResponseText,
-            sources: [...(msg.sources || []), ...(chunk.sources || [])],
-            images: [...(msg.images || []), ...(chunk.images || [])],
-            videos: [...(msg.videos || []), ...(chunk.videos || [])],
-        } : msg));
+              if (isVocalQuery && settings.voiceEnabled) {
+                  let match;
+                  while ((match = sentenceAccumulator.match(sentenceEndRegex))) {
+                      const sentence = sentenceAccumulator.substring(0, match.index! + 1).trim();
+                      if (sentence) {
+                          sentenceQueueRef.current.push(sentence);
+                          if (!isProcessingSentencesRef.current) {
+                              processVocalStream();
+                          }
+                      }
+                      sentenceAccumulator = sentenceAccumulator.substring(match.index! + 1);
+                  }
+              }
+          }
 
-        if (isVocalQuery) setLiveVocalResponse({ id: modelMessageId, text: fullResponseText });
+          if (chunk.toolCalls) {
+              const webSearchCalls = chunk.toolCalls.filter(tc => tc.functionCall?.name === 'webSearch');
+              const otherToolParts = chunk.toolCalls.filter(tc => tc.functionCall?.name !== 'webSearch');
+
+              if (webSearchCalls.length > 0) {
+                  for (const call of webSearchCalls) {
+                      const { query, maxImages, maxVideos } = call.functionCall.args;
+                      const searchResult = await searchImagesAndVideos(query, maxImages, maxVideos);
+                      setMessages(prev => prev.map(msg => msg.id === modelMessageId ? {
+                          ...msg,
+                          images: [...(msg.images || []), ...searchResult.images],
+                          videos: [...(msg.videos || []), ...searchResult.videos],
+                      } : msg));
+                  }
+              }
+              if (otherToolParts.length > 0) {
+                  const normalizedCalls = otherToolParts
+                    .map(p => ({ name: p.functionCall.name, args: p.functionCall.args }))
+                    .filter(c => c && c.name);
+                  accumulatedToolCalls.push(...normalizedCalls);
+                  await executeToolCalls(normalizedCalls);
+              }
+          }
+
+          setMessages(prev => prev.map(msg => msg.id === modelMessageId ? {
+              ...msg, text: fullResponseText,
+              sources: [...(msg.sources || []), ...(chunk.sources || [])],
+          } : msg));
+
+          if (isVocalQuery) setLiveVocalResponse({ id: modelMessageId, text: fullResponseText });
+      }
+
+      // Handle any remaining text in the accumulator
+      if (isVocalQuery && settings.voiceEnabled && sentenceAccumulator.trim()) {
+          const leftover = sentenceAccumulator.trim();
+          sentenceQueueRef.current.push(leftover);
+          if (!isProcessingSentencesRef.current) {
+              processVocalStream();
+          }
       }
 
       if (accumulatedToolCalls.length > 0) {
-        await executeToolCalls(accumulatedToolCalls);
+          await executeToolCalls(accumulatedToolCalls);
       }
       
       const relatedQuestions = await generateRelatedQuestions(query, fullResponseText);
       setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isLoading: false, related: relatedQuestions } : msg));
       
-      if (settings.voiceEnabled && fullResponseText) {
-          handlePlayAudio(modelMessageId, fullResponseText);
-      }
-
+      // On-demand TTS: Do not auto-generate audio. User must press play button under the message.
     } catch (error) {
       console.error('An error occurred:', error);
       setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isLoading: false, text: "Üzr istəyirəm, xəta baş verdi. Zəhmət olmasa yenidən cəhd edin." } : msg));
@@ -290,10 +371,10 @@ const App: React.FC = () => {
 
   const renderView = () => {
     switch (activeView) {
-        case 'news': return <News />;
+        case 'news': return <News themeColor={activeThemeColor} />;
         case 'weather': return <Weather />;
         case 'translate': return <Translate />;
-        case 'settings': return <Settings settings={settings} onSettingsChange={setSettings} />;
+        case 'settings': return <Settings settings={settings} onSettingsChange={setSettings} themeColor={activeThemeColor} />;
         case 'search':
         default:
             return (
@@ -325,11 +406,12 @@ const App: React.FC = () => {
   };
 
   const ActiveAnimation = THEMES.find(t => t.id === settings.theme)?.animation;
+  const activeThemeColor = THEMES.find(t => t.id === settings.theme)?.colors[2];
 
   return (
     <div className={`flex h-screen bg-transparent text-text-main transition-opacity duration-500 ${isAppReady ? 'opacity-100' : 'opacity-0'}`}>
       {ActiveAnimation && <ActiveAnimation scrollOffset={scrollOffset} analyserNode={analyserRef.current} />}
-      <Sidebar activeView={activeView} setActiveView={setActiveView} />
+      <Sidebar activeView={activeView} setActiveView={setActiveView} themeColor={activeThemeColor} />
       <div className="flex-1 flex flex-col overflow-y-hidden">
         {renderView()}
       </div>

@@ -1,7 +1,7 @@
 import type { NewsArticle } from '../types';
+import { searchNews as serperSearchNews } from './serperService';
 
-const GNEWS_API_KEY = '286e9378fdc9ac15698ee4398547d04a';
-
+const GNEWS_API_KEY = import.meta.env.VITE_GNEWS_API_KEY;
 
 // Mappings
 const azCategoryToEn: { [key: string]: string } = {
@@ -16,14 +16,13 @@ const azCategoryToEn: { [key: string]: string } = {
 };
 
 const gnewsCategoryMap: { [key: string]: string } = {
-    'politics': 'nation',
-    'sports': 'sports',
+    'general': 'general',
+    'business': 'business',
     'technology': 'technology',
     'entertainment': 'entertainment',
-    'business': 'business',
     'health': 'health',
     'science': 'science',
-    'world': 'world',
+    'sports': 'sports',
 };
 
 // Smart Categorization Keywords (in Azerbaijani)
@@ -35,6 +34,8 @@ const categoryKeywords: { [key: string]: string[] } = {
     'iqtisadiyyat': ['iqtisadiyyat', 'biznes', 'şirkət', 'investisiya', 'bank', 'dollar', 'manat', 'neft'],
     'səhiyyə': ['səhiyyə', 'xəstəxana', 'həkim', 'virus', 'covid', 'sağlamlıq', 'dərman'],
     'elm': ['elm', 'tədqiqat', 'kəşf', 'kosmos', 'nasa', 'alimlər', 'universitet'],
+    'sports': ['futbol', 'qarabağ', 'neftçi', 'klub', 'oyun', 'çempionat', 'idmançı', 'komanda'],
+    'science': ['elm', 'tədqiqat', 'kəşf', 'kosmos', 'nasa', 'alimlər', 'universitet'],
 };
 
 const smartCategorize = (article: NewsArticle): string => {
@@ -46,27 +47,64 @@ const smartCategorize = (article: NewsArticle): string => {
             }
         }
     }
-    return 'dünya'; // Default category
+    return 'general'; // Default category
 };
 
-const fetchGNews = async (query: string, category: string, language: string, country: string | null): Promise<NewsArticle[]> => {
+// Build a simple localized query for Serper fallback
+const buildFallbackQuery = (category: string, language: string, country?: string | null) => {
+    const catTr: Record<string, string> = {
+        general: 'gündem', business: 'ekonomi', technology: 'teknoloji', entertainment: 'eğlence', health: 'sağlık', science: 'bilim', sports: 'spor'
+    };
+    const catAz: Record<string, string> = {
+        general: 'xəbərlər', business: 'iqtisadiyyat', technology: 'texnologiya', entertainment: 'mədəniyyət', health: 'səhiyyə', science: 'elm', sports: 'idman'
+    };
+    const catRu: Record<string, string> = {
+        general: 'новости', business: 'экономика', technology: 'технологии', entertainment: 'развлечения', health: 'здоровье', science: 'наука', sports: 'спорт'
+    };
+    const catEn: Record<string, string> = {
+        general: 'news', business: 'business', technology: 'technology', entertainment: 'entertainment', health: 'health', science: 'science', sports: 'sports'
+    };
+
+    const lc = language.toLowerCase();
+    const cc = (country || '').toLowerCase();
+    const cat = (lc === 'tr' ? catTr : lc === 'az' ? catAz : lc === 'ru' ? catRu : catEn)[category] || (catEn[category] || 'news');
+
+    if (lc === 'tr') return `Türkiye ${cat} haberleri`;
+    if (lc === 'az') return `Azərbaycan ${cat}`;
+    if (lc === 'ru') return `Россия ${cat}`;
+    return `${cc ? cc.toUpperCase() + ' ' : ''}${cat}`;
+};
+
+const toHL = (language: string) => {
+    const hl = language.toLowerCase();
+    if (['az', 'tr', 'ru', 'en'].includes(hl)) return hl;
+    return 'en';
+};
+
+const toGL = (country?: string | null) => {
+    if (!country) return undefined;
+    const gl = country.toLowerCase();
+    // Serper expects country codes like 'tr','ru','us','gb'. 'az' may not be supported but we can still pass it; if unsupported, Serper ignores it.
+    return gl;
+};
+
+const fetchGNews = async (category: string, language: string, country: string | null): Promise<NewsArticle[]> => {
     let url = `https://gnews.io/api/v4/top-headlines?apikey=${GNEWS_API_KEY}&lang=${language}`;
-    if (query) {
-        url = `https://gnews.io/api/v4/search?apikey=${GNEWS_API_KEY}&q=${encodeURIComponent(query)}&lang=${language}`;
-    } else if (category !== 'hamısı') {
-        const enCategory = azCategoryToEn[category];
-        const gnewsCategory = enCategory ? gnewsCategoryMap[enCategory] : undefined;
-        if (gnewsCategory) {
-            url += `&topic=${gnewsCategory}`;
-        }
+
+    const gnewsCategory = gnewsCategoryMap[category];
+    if (gnewsCategory) {
+        url += `&topic=${gnewsCategory}`;
     }
-    if (country) url += `&country=${country}`;
+
+    if (country) {
+        url += `&country=${country}`;
+    }
 
     try {
         const response = await fetch(url);
         if (!response.ok) throw new Error(`GNews API error: ${response.statusText}`);
         const data = await response.json();
-        
+
         return (data.articles || []).map((article: any, index: number): NewsArticle => ({
             id: `${article.source.name}-${article.publishedAt}-${index}`,
             title: article.title,
@@ -83,12 +121,40 @@ const fetchGNews = async (query: string, category: string, language: string, cou
     }
 };
 
+export const fetchNews = async ({ category = 'general', language = 'az', country = null }: { category?: string, language?: string, country?: string | null }): Promise<NewsArticle[]> => {
+    let combined: NewsArticle[] = [];
 
-export const fetchNews = async ({ query = '', category = 'hamısı', language = 'az', country = null }: { query?: string, category?: string, language?: string, country?: string | null }): Promise<NewsArticle[]> => {
-    // NewsData.io API key was invalid, so we now rely solely on GNews.
-    const gnewsArticles = await fetchGNews(query, category, language, country);
+    if (language === 'all') {
+        // Aggregate across key languages to simulate "all languages"
+        const langList = ['az', 'tr', 'ru', 'en'];
+        const results = await Promise.all(langList.map(l => fetchGNews(category, l, country)));
+        combined = results.flat();
+    } else {
+        const gnewsArticles = await fetchGNews(category, language, country);
+        combined = [...gnewsArticles];
+    }
 
-    const combined = [...gnewsArticles];
+    // Fallback: if GNews returns no results (or very few), try Serper News
+    if (combined.length < 3) {
+        try {
+            const query = buildFallbackQuery(category, language, country || undefined);
+            const serperItems = await serperSearchNews(query, 20, { gl: toGL(country), hl: toHL(language) });
+            if (serperItems && serperItems.length) {
+                const mapped: NewsArticle[] = serperItems.map((n, index) => ({
+                    id: `${n.link}-${index}`,
+                    title: n.title,
+                    summary: n.snippet || null,
+                    url: n.link,
+                    source: n.source || 'Serper',
+                    imageUrl: (n as any).imageUrl || null,
+                    publishedAt: n.date || new Date().toISOString(),
+                }));
+                combined = [...combined, ...mapped];
+            }
+        } catch (e) {
+            console.warn('Serper News fallback failed:', e);
+        }
+    }
 
     // Deduplicate (still useful in case GNews returns duplicates)
     const uniqueArticles = new Map<string, NewsArticle>();

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MicrophoneIcon, CameraIcon, CloseIcon, LoadingSpinner, RotateCameraIcon } from './Icons';
+import { CameraCapture, useCameraCapture } from './CameraCapture';
 
 interface VoiceOverlayProps {
     isOpen: boolean;
@@ -10,24 +11,30 @@ interface VoiceOverlayProps {
 }
 
 type ConversationState = 'idle' | 'listening' | 'processing' | 'responding';
-type FacingMode = 'user' | 'environment';
 
 const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
 export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, onQuery, liveResponse, isResponding }) => {
     const [transcript, setTranscript] = useState('');
     const [isCameraActive, setIsCameraActive] = useState(false);
-    const [facingMode, setFacingMode] = useState<FacingMode>('user');
     const [error, setError] = useState<string | null>(null);
-    const [frameCaptured, setFrameCaptured] = useState(false);
     const [conversationState, setConversationState] = useState<ConversationState>('idle');
 
     const recognitionRef = useRef<any>(null);
-    const videoRef = useRef<HTMLVideoElement>(null);
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    const capturedImagesRef = useRef<string[]>([]);
     const finalTranscriptRef = useRef<string>('');
     const shouldBeListeningRef = useRef(false);
+    const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const captureIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+    const {
+        capturedImages,
+        isCapturing,
+        startCapturing,
+        stopCapturing,
+        handleImageCaptured,
+        clearImages,
+        getImagesAsBase64
+    } = useCameraCapture();
 
     const isListening = conversationState === 'listening';
 
@@ -39,21 +46,26 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, onQ
         }
     }, [liveResponse, conversationState]);
 
-    const stopCamera = () => {
-        if (videoRef.current?.srcObject) {
-            (videoRef.current.srcObject as MediaStream).getTracks().forEach(track => track.stop());
-            videoRef.current.srcObject = null;
-        }
-        setIsCameraActive(false);
-    };
-
     const cleanup = () => {
         if (recognitionRef.current) {
             shouldBeListeningRef.current = false;
             recognitionRef.current.stop();
             recognitionRef.current = null;
         }
-        stopCamera();
+        
+        if (captureIntervalRef.current) {
+            clearInterval(captureIntervalRef.current);
+            captureIntervalRef.current = null;
+        }
+        
+        if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = null;
+        }
+        
+        stopCapturing();
+        clearImages();
+        setIsCameraActive(false);
         setTranscript('');
         finalTranscriptRef.current = '';
         setError(null);
@@ -93,6 +105,15 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, onQ
 
                     finalTranscriptRef.current = final_transcript;
                     setTranscript(final_transcript + interim_transcript);
+
+                    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+
+                    if (event.results[event.results.length - 1].isFinal) {
+                        silenceTimerRef.current = setTimeout(() => {
+                            console.log("Silence detected, submitting query.");
+                            handleToggleListen(); // This will now act as the 'stop' action
+                        }, 1200); // Submit after 1.2s of silence
+                    }
                 };
 
                 recognition.onerror = (event: any) => {
@@ -126,21 +147,6 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, onQ
 
         return cleanup;
     }, [isOpen]);
-
-    const startCamera = async (mode: FacingMode) => {
-      if (!videoRef.current) return;
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode } });
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        setIsCameraActive(true);
-        setError(null);
-      } catch (err) {
-        console.error("Camera access or play failed:", err);
-        setError("Kamera işə salına bilmədi. Zəhmət olmasa, icazələri yoxlayın.");
-        stopCamera();
-      }
-    };
     
     const handleToggleListen = () => {
         const recognition = recognitionRef.current;
@@ -150,24 +156,36 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, onQ
         }
     
         if (isListening) {
+            if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
             shouldBeListeningRef.current = false;
             recognition.stop();
+            
+            // Stop camera capturing
+            if (isCameraActive) {
+                stopCapturing();
+            }
+            
             setConversationState('processing');
             const queryText = finalTranscriptRef.current.trim() || transcript.trim();
-            if (queryText || capturedImagesRef.current.length > 0) {
-                onQuery(queryText, capturedImagesRef.current);
+            const images = isCameraActive ? getImagesAsBase64() : [];
+            
+            if (queryText || images.length > 0) {
+                onQuery(queryText, images);
             } else {
                 setConversationState('idle');
             }
         } else {
             setTranscript('');
             finalTranscriptRef.current = '';
-            capturedImagesRef.current = [];
+            clearImages();
             shouldBeListeningRef.current = true;
+            
+            // Start camera capturing if camera is active
+            if (isCameraActive) {
+                startCapturing();
+            }
+            
             try {
-                if(isCameraActive) {
-                  captureFrame();
-                }
                 recognition.start();
             } catch (e: any) {
                 console.error("Could not start recognition:", e);
@@ -181,58 +199,35 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, onQ
     };
 
     const handleToggleCamera = () => {
-        if(isCameraActive) {
-            stopCamera();
-        } else {
-            startCamera(facingMode);
+        setIsCameraActive(!isCameraActive);
+        if (isCameraActive) {
+            stopCapturing();
+            clearImages();
         }
     };
 
-    const handleFlipCamera = () => {
-        if (!isCameraActive) return;
-        const newFacingMode = facingMode === 'user' ? 'environment' : 'user';
-        setFacingMode(newFacingMode);
-        // Stop current stream before starting a new one
-        if (videoRef.current?.srcObject) {
-            (videoRef.current.srcObject as MediaStream).getTracks().forEach(track => track.stop());
-        }
-        startCamera(newFacingMode);
+    const handleCameraError = (errorMessage: string) => {
+        setError(errorMessage);
+        setIsCameraActive(false);
     };
-
-    const captureFrame = () => {
-        const video = videoRef.current;
-        const canvas = canvasRef.current;
-        if(video && canvas && video.readyState >= 3) { // HAVE_FUTURE_DATA
-            try {
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
-                const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-                capturedImagesRef.current = [dataUrl];
-                setFrameCaptured(true);
-                setTimeout(() => setFrameCaptured(false), 500); // Visual feedback for 500ms
-            } catch(e) {
-                console.error("Could not capture frame:", e);
-            }
-        } else {
-            console.warn("Could not capture frame, video not ready. State:", video?.readyState);
-            setError("Kamera şəkli çəkilə bilmədi. Zəhmət olmasa yenidən cəhd edin.");
-        }
-    }
 
     const renderMainContent = () => {
         if (error) return <span className="text-red-400">{error}</span>;
         
         switch (conversationState) {
             case 'listening':
-                return transcript || (isCameraActive ? 'Dinlənilir və qeydə alınır...' : 'Dinlənilir...');
+                const baseText = transcript || 'Dinlənilir...';
+                const cameraInfo = isCameraActive ? ` (${capturedImages.length} şəkil çəkildi)` : '';
+                return baseText + cameraInfo;
             case 'processing':
                 return <div className="flex justify-center items-center"><LoadingSpinner className="w-6 h-6" /></div>;
             case 'responding':
                 return liveResponse?.text;
             case 'idle':
             default:
-                return 'Danışmağa başlamaq üçün mikrofona klikləyin';
+                return isCameraActive 
+                    ? 'Kamera aktiv. Danışmağa başlamaq üçün mikrofona klikləyin'
+                    : 'Danışmağa başlamaq üçün mikrofona klikləyin';
         }
     };
 
@@ -240,47 +235,74 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({ isOpen, onClose, onQ
 
     return (
         <div className="fixed inset-0 bg-bg-jet z-50 flex flex-col items-center justify-between p-8 text-white">
-            <video 
-              ref={videoRef} 
-              autoPlay 
-              playsInline 
-              muted
-              className={`absolute inset-0 w-full h-full object-cover z-0 transition-all duration-500 border-4 ${frameCaptured ? 'border-accent' : 'border-transparent'} ${isCameraActive ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
-            ></video>
-            <canvas ref={canvasRef} className="hidden"></canvas>
-            
+            {/* Camera Component */}
             {isCameraActive && (
-                <button
-                    onClick={handleFlipCamera}
-                    className="absolute top-6 right-6 z-30 w-12 h-12 bg-black/30 backdrop-blur-sm rounded-full flex items-center justify-center hover:bg-black/50 transition-colors"
-                    aria-label="Kameranı çevir"
-                >
-                    <RotateCameraIcon className="w-6 h-6 text-white" />
-                </button>
+                <CameraCapture
+                    isActive={isCapturing}
+                    onImageCaptured={handleImageCaptured}
+                    captureInterval={3000}
+                    onError={handleCameraError}
+                    className="absolute inset-0 w-full h-full z-0"
+                />
             )}
-
-            <div className={`absolute inset-0 bg-bg-jet z-10 transition-opacity duration-500 ${isCameraActive ? 'opacity-70' : 'opacity-100'}`}></div>
+            
+            {/* Overlay for better text visibility */}
+            <div className={`absolute inset-0 z-10 transition-opacity duration-500 ${
+                isCameraActive ? 'bg-bg-jet/70' : 'bg-bg-jet'
+            }`}></div>
 
             <header className="relative z-20 text-center">
                 <h1 className="text-6xl font-bold">NovEra</h1>
             </header>
 
             <main className="relative z-20 flex flex-col items-center justify-center flex-grow w-full">
-                {!isCameraActive && conversationState !== 'processing' && <div className="w-48 h-48 bg-gradient-to-br from-yellow-400 via-red-500 to-purple-600 rounded-full orb-animation"></div>}
-                <div className="w-full max-w-2xl min-h-[4rem] mt-12 bg-white/5 rounded-2xl p-4 text-center text-lg text-gray-300">
+                {!isCameraActive && conversationState !== 'processing' && (
+                    <div className="w-48 h-48 bg-gradient-to-br from-yellow-400 via-red-500 to-purple-600 rounded-full orb-animation"></div>
+                )}
+                
+                <div className="w-full max-w-2xl min-h-[4rem] mt-12 bg-white/10 backdrop-blur-sm rounded-2xl p-4 text-center text-lg text-gray-300 border border-white/20">
                     {renderMainContent()}
                 </div>
+                
+                {/* Camera status indicator */}
+                {isCameraActive && (
+                    <div className="mt-4 flex items-center space-x-2 text-sm text-blue-400">
+                        <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></div>
+                        <span>
+                            Kamera aktiv - {capturedImages.length} şəkil çəkildi
+                            {isCapturing && ' (Çəkiliş davam edir...)'}
+                        </span>
+                    </div>
+                )}
             </main>
             
             <footer className="relative z-20 w-full max-w-md">
                 <div className="flex justify-around items-center">
-                    <button onClick={handleToggleListen} className={`w-20 h-20 rounded-full flex items-center justify-center transition-colors ${isListening ? 'bg-red-500 recording-pulse' : 'bg-white/10 hover:bg-white/20'}`} aria-label={isListening ? 'Dayandır' : 'Başlat'}>
+                    <button 
+                        onClick={handleToggleListen} 
+                        className={`w-20 h-20 rounded-full flex items-center justify-center transition-colors ${
+                            isListening ? 'bg-red-500 recording-pulse' : 'bg-white/10 hover:bg-white/20'
+                        }`} 
+                        aria-label={isListening ? 'Dayandır' : 'Başlat'}
+                    >
                         <MicrophoneIcon className="w-10 h-10 text-white" />
                     </button>
-                    <button onClick={handleToggleCamera} className={`w-16 h-16 rounded-full flex items-center justify-center transition-colors ${isCameraActive ? 'bg-accent text-bg-jet' : 'bg-white/10 hover:bg-white/20 text-white'}`} aria-label={isCameraActive ? 'Kameranı söndür' : 'Kameranı yandır'}>
+                    
+                    <button 
+                        onClick={handleToggleCamera} 
+                        className={`w-16 h-16 rounded-full flex items-center justify-center transition-colors ${
+                            isCameraActive ? 'bg-accent text-bg-jet' : 'bg-white/10 hover:bg-white/20 text-white'
+                        }`} 
+                        aria-label={isCameraActive ? 'Kameranı söndür' : 'Kameranı yandır'}
+                    >
                         <CameraIcon className="w-8 h-8" />
                     </button>
-                    <button onClick={onClose} className="w-16 h-16 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors" aria-label="Bağla">
+                    
+                    <button 
+                        onClick={onClose} 
+                        className="w-16 h-16 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors" 
+                        aria-label="Bağla"
+                    >
                         <CloseIcon className="w-8 h-8 text-white" />
                     </button>
                 </div>

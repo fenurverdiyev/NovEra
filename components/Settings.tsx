@@ -3,13 +3,13 @@ import type { AppSettings } from '../types';
 import { AVAILABLE_VOICES } from '../services/elevenLabsService';
 import { THEMES } from '../animations/themes';
 
-
 interface SettingsProps {
   settings: AppSettings;
   onSettingsChange: (settings: AppSettings) => void;
+  themeColor?: string;
 }
 
-export const Settings: React.FC<SettingsProps> = ({ settings, onSettingsChange }) => {
+export const Settings: React.FC<SettingsProps> = ({ settings, onSettingsChange, themeColor = '#2196f3' }) => {
 
   const handleVoiceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     onSettingsChange({ ...settings, voiceEnabled: e.target.checked });
@@ -39,7 +39,13 @@ export const Settings: React.FC<SettingsProps> = ({ settings, onSettingsChange }
               onChange={handleVoiceChange}
               className="sr-only peer"
             />
-            <div className="w-11 h-6 bg-bg-onyx rounded-full peer peer-focus:ring-2 peer-focus:ring-accent peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
+            <div 
+              className="w-11 h-6 bg-bg-onyx rounded-full peer peer-focus:ring-2 after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-white"
+              style={{
+                '--tw-ring-color': themeColor,
+                backgroundColor: settings.voiceEnabled ? themeColor : undefined,
+              } as React.CSSProperties}
+            ></div>
           </label>
         </div>
         <div className="flex justify-between items-center pt-6 border-t border-bg-onyx">
@@ -50,7 +56,8 @@ export const Settings: React.FC<SettingsProps> = ({ settings, onSettingsChange }
           <select
             value={settings.voiceId}
             onChange={handleVoiceIdChange}
-            className="w-48 bg-bg-onyx p-2 rounded-lg text-text-main focus:outline-none focus:ring-2 focus:ring-accent"
+            className="w-48 bg-bg-onyx p-2 rounded-lg text-text-main focus:outline-none focus:ring-2"
+            style={{ '--tw-ring-color': themeColor } as React.CSSProperties}
             aria-label="Cavab səsini seçin"
           >
             {AVAILABLE_VOICES.map(voice => <option key={voice.id} value={voice.id}>{voice.name}</option>)}
@@ -61,7 +68,12 @@ export const Settings: React.FC<SettingsProps> = ({ settings, onSettingsChange }
             <p className="text-sm text-text-sub mb-4">Tətbiqin rəng sxemini və interaktiv təcrübəsini seçin.</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 {THEMES.map(theme => (
-                    <button key={theme.id} onClick={() => handleThemeChange(theme.id)} className={`p-4 rounded-lg border-2 transition-all text-left flex flex-col justify-between h-48 ${settings.theme === theme.id ? 'border-accent' : 'border-bg-onyx hover:border-text-sub'}`}>
+                    <button 
+                        key={theme.id} 
+                        onClick={() => handleThemeChange(theme.id)} 
+                        className={`p-4 rounded-lg border-2 transition-all text-left flex flex-col justify-between h-48 ${settings.theme !== theme.id && 'border-bg-onyx hover:border-text-sub'}`}
+                        style={settings.theme === theme.id ? { borderColor: themeColor, boxShadow: `0 0 10px ${themeColor}` } : {}}
+                    >
                         <div>
                           <div className="flex gap-2 mb-3">
                               {theme.colors.map(color => <div key={color} className="w-6 h-6 rounded-full" style={{ backgroundColor: color }} />)}
