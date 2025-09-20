@@ -1,8 +1,24 @@
-const SERPER_API_KEY = import.meta.env.VITE_SERPAPI_KEY;
+const CLIENT_SERPER_API_KEY = import.meta.env.VITE_SERPER_API_KEY || import.meta.env.VITE_SERPAPI_KEY;
 const SERPER_BASE_URL = 'https://google.serper.dev';
+const SERPER_PROXY_URL = '/api/serper-proxy';
 
-if (!SERPER_API_KEY) {
-    console.warn('VITE_SERPAPI_KEY not found. Search features will be limited.');
+if (!CLIENT_SERPER_API_KEY) {
+    console.warn('Serper client key not found; will rely on serverless proxy if configured.');
+}
+
+async function callSerperProxy<T>(type: 'search' | 'images' | 'videos' | 'news', payload: { q: string; num?: number; gl?: string; hl?: string }): Promise<T | null> {
+    try {
+        const resp = await fetch(SERPER_PROXY_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type, ...payload }),
+        });
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        return data as T;
+    } catch (e) {
+        return null;
+    }
 }
 
 export interface SerperSearchResult {
@@ -79,20 +95,19 @@ export interface SerperResponse {
  * @returns Promise<SerperResponse | null>
  */
 export async function searchWeb(query: string, num: number = 10): Promise<SerperResponse | null> {
-    if (!SERPER_API_KEY) {
-        console.warn('Serper API key not available');
-        return null;
-    }
-
     if (!query || query.trim().length === 0) {
         return null;
     }
 
     try {
+        const viaProxy = await callSerperProxy<SerperResponse>('search', { q: query.trim(), num });
+        if (viaProxy) return viaProxy;
+
+        if (!CLIENT_SERPER_API_KEY) return null;
         const response = await fetch(`${SERPER_BASE_URL}/search`, {
             method: 'POST',
             headers: {
-                'X-API-KEY': SERPER_API_KEY,
+                'X-API-KEY': CLIENT_SERPER_API_KEY,
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
@@ -122,20 +137,19 @@ export async function searchWeb(query: string, num: number = 10): Promise<Serper
  * @returns Promise<SerperImageResult[] | null>
  */
 export async function searchImages(query: string, num: number = 10): Promise<SerperImageResult[] | null> {
-    if (!SERPER_API_KEY) {
-        console.warn('Serper API key not available');
-        return null;
-    }
-
     if (!query || query.trim().length === 0) {
         return null;
     }
 
     try {
+        const viaProxy = await callSerperProxy<any>('images', { q: query.trim(), num });
+        if (viaProxy && viaProxy.images) return viaProxy.images as SerperImageResult[];
+
+        if (!CLIENT_SERPER_API_KEY) return null;
         const response = await fetch(`${SERPER_BASE_URL}/images`, {
             method: 'POST',
             headers: {
-                'X-API-KEY': SERPER_API_KEY,
+                'X-API-KEY': CLIENT_SERPER_API_KEY,
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
@@ -165,20 +179,19 @@ export async function searchImages(query: string, num: number = 10): Promise<Ser
  * @returns Promise<SerperVideoResult[] | null>
  */
 export async function searchVideos(query: string, num: number = 10): Promise<SerperVideoResult[] | null> {
-    if (!SERPER_API_KEY) {
-        console.warn('Serper API key not available');
-        return null;
-    }
-
     if (!query || query.trim().length === 0) {
         return null;
     }
 
     try {
+        const viaProxy = await callSerperProxy<any>('videos', { q: query.trim(), num });
+        if (viaProxy && viaProxy.videos) return viaProxy.videos as SerperVideoResult[];
+
+        if (!CLIENT_SERPER_API_KEY) return null;
         const response = await fetch(`${SERPER_BASE_URL}/videos`, {
             method: 'POST',
             headers: {
-                'X-API-KEY': SERPER_API_KEY,
+                'X-API-KEY': CLIENT_SERPER_API_KEY,
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
@@ -232,20 +245,31 @@ export async function searchImagesAndVideos(
  * @returns Promise<SerperNewsItem[] | null>
  */
 export async function searchNews(query: string, num: number = 10, opts?: { gl?: string; hl?: string }): Promise<SerperNewsItem[] | null> {
-    if (!SERPER_API_KEY) {
-        console.warn('Serper API key not available');
-        return null;
-    }
-
     if (!query || query.trim().length === 0) {
         return null;
     }
 
     try {
+        const viaProxy = await callSerperProxy<any>('news', { q: query.trim(), num, gl: opts?.gl, hl: opts?.hl });
+        if (viaProxy && viaProxy.news) {
+            const items = viaProxy.news as any[];
+            const normalized: SerperNewsItem[] = items.map((n: any, idx: number) => ({
+                title: n.title,
+                link: n.link,
+                snippet: n.snippet,
+                source: n.source,
+                date: n.date,
+                imageUrl: n.imageUrl,
+                position: n.position ?? idx + 1,
+            }));
+            return normalized;
+        }
+
+        if (!CLIENT_SERPER_API_KEY) return null;
         const response = await fetch(`${SERPER_BASE_URL}/news`, {
             method: 'POST',
             headers: {
-                'X-API-KEY': SERPER_API_KEY,
+                'X-API-KEY': CLIENT_SERPER_API_KEY,
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
@@ -264,7 +288,6 @@ export async function searchNews(query: string, num: number = 10, opts?: { gl?: 
 
         const data = await response.json();
         const items = (data.news || []) as any[];
-        // Normalize shape to SerperNewsItem
         const normalized: SerperNewsItem[] = items.map((n: any, idx: number) => ({
             title: n.title,
             link: n.link,
